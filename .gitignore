@@ -1,0 +1,34 @@
+# Global backups & archives
+Backups/
+backups/
+backend/backups/
+*.tar.gz
+*.zip
+*.log
+
+# Python virtual environments
+backend/venv/
+venv/
+.venv/
+
+# Node dependencies
+portal/node_modules/
+frontend/node_modules/
+node_modules/
+
+# Next.js build outputs
+portal/.next/
+frontend/.next/
+.next/
+
+# Environment & secrets
+.env
+.env.*
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS junk
+.DS_Store
+Thumbs.db
