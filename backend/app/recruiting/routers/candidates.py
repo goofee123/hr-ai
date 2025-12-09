@@ -1,7 +1,8 @@
 """Candidates router - using Supabase REST API."""
 
+from datetime import datetime, timezone
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
@@ -9,11 +10,15 @@ from app.core.permissions import Permission, require_permission
 from app.core.security import TokenData
 from app.core.supabase_client import get_supabase_client
 from app.recruiting.schemas.candidate import (
+    CandidateApplicationHistory,
+    CandidateActivityLog,
     CandidateCreate,
     CandidateDetailResponse,
+    CandidateMatchingJob,
     CandidateResponse,
     CandidateSearchResult,
     CandidateUpdate,
+    ConvertToApplicantRequest,
     ResumeResponse,
 )
 from app.shared.schemas.common import PaginatedResponse
@@ -392,3 +397,381 @@ async def list_resumes(
     resumes.sort(key=lambda x: x.get("version_number", 0), reverse=True)
 
     return [ResumeResponse.model_validate(r) for r in resumes]
+
+
+@router.get("/{candidate_id}/applications", response_model=List[CandidateApplicationHistory])
+async def get_candidate_applications(
+    candidate_id: UUID,
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Get all applications for a candidate (application history)."""
+    client = get_supabase_client()
+
+    # Verify candidate exists
+    candidate = await client.select(
+        "candidates",
+        "id",
+        filters={
+            "id": str(candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found",
+        )
+
+    # Get applications
+    applications = await client.select(
+        "applications",
+        "*",
+        filters={"candidate_id": str(candidate_id)},
+    ) or []
+
+    # Get job requisition details for each application
+    result = []
+    now = datetime.now(timezone.utc)
+
+    for app in applications:
+        job = await client.select(
+            "job_requisitions",
+            "id,requisition_number,external_title",
+            filters={"id": app["requisition_id"]},
+            single=True,
+        )
+
+        if job:
+            applied_at = datetime.fromisoformat(app["applied_at"].replace("Z", "+00:00"))
+            days_in_pipeline = (now - applied_at).days
+
+            result.append(CandidateApplicationHistory(
+                application_id=UUID(app["id"]),
+                requisition_id=UUID(app["requisition_id"]),
+                requisition_number=job.get("requisition_number", ""),
+                job_title=job.get("external_title", ""),
+                applied_at=applied_at,
+                current_stage=app.get("current_stage", "Applied"),
+                status=app.get("status", "new"),
+                days_in_pipeline=days_in_pipeline,
+            ))
+
+    # Sort by applied_at descending
+    result.sort(key=lambda x: x.applied_at, reverse=True)
+
+    return result
+
+
+@router.get("/{candidate_id}/matching-jobs", response_model=List[CandidateMatchingJob])
+async def get_matching_jobs(
+    candidate_id: UUID,
+    limit: int = Query(10, ge=1, le=50),
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Get open jobs that match the candidate's profile.
+
+    Currently uses simple skills-based matching.
+    Will use AI embeddings once Sprint 4 is complete.
+    """
+    client = get_supabase_client()
+
+    # Get candidate with skills
+    candidate = await client.select(
+        "candidates",
+        "*",
+        filters={
+            "id": str(candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found",
+        )
+
+    candidate_skills = set(s.lower() for s in (candidate.get("skills") or []))
+
+    # Get open jobs
+    jobs = await client.select(
+        "job_requisitions",
+        "*",
+        filters={
+            "tenant_id": str(current_user.tenant_id),
+            "status": "open",
+        },
+    ) or []
+
+    # Get candidate's existing applications to exclude those jobs
+    existing_apps = await client.select(
+        "applications",
+        "requisition_id",
+        filters={"candidate_id": str(candidate_id)},
+    ) or []
+    applied_job_ids = {app["requisition_id"] for app in existing_apps}
+
+    # Score jobs based on skills match
+    scored_jobs = []
+    for job in jobs:
+        # Skip jobs already applied to
+        if job["id"] in applied_job_ids:
+            continue
+
+        # Simple skills matching (placeholder for AI matching later)
+        job_requirements = job.get("requirements", "").lower()
+        job_description = job.get("job_description", "").lower()
+
+        match_reasons = []
+        matching_skills = 0
+
+        for skill in candidate_skills:
+            if skill in job_requirements or skill in job_description:
+                matching_skills += 1
+                match_reasons.append(f"Skills: {skill}")
+
+        # Calculate simple match score
+        if candidate_skills:
+            match_score = matching_skills / len(candidate_skills)
+        else:
+            match_score = 0.0
+
+        # Only include jobs with some match or limit reached
+        if match_score > 0 or len(scored_jobs) < limit:
+            scored_jobs.append({
+                "job": job,
+                "score": match_score,
+                "reasons": match_reasons[:5],  # Top 5 reasons
+            })
+
+    # Sort by score descending
+    scored_jobs.sort(key=lambda x: x["score"], reverse=True)
+    scored_jobs = scored_jobs[:limit]
+
+    # Build response
+    result = []
+    for item in scored_jobs:
+        job = item["job"]
+        result.append(CandidateMatchingJob(
+            requisition_id=UUID(job["id"]),
+            requisition_number=job.get("requisition_number", ""),
+            job_title=job.get("external_title", ""),
+            department_name=None,  # Would need to join with departments
+            location=None,  # Would need to join with locations
+            match_score=round(item["score"], 2),
+            match_reasons=item["reasons"] if item["reasons"] else None,
+            job_status=job.get("status", "unknown"),
+        ))
+
+    return result
+
+
+@router.get("/{candidate_id}/activity", response_model=List[CandidateActivityLog])
+async def get_candidate_activity(
+    candidate_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Get activity timeline for a candidate."""
+    client = get_supabase_client()
+
+    # Verify candidate exists
+    candidate = await client.select(
+        "candidates",
+        "id,first_name,last_name,created_at",
+        filters={
+            "id": str(candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found",
+        )
+
+    activities = []
+
+    # Activity: Candidate created
+    activities.append(CandidateActivityLog(
+        id=uuid4(),
+        activity_type="candidate_created",
+        activity_description=f"Candidate profile created for {candidate['first_name']} {candidate['last_name']}",
+        activity_data=None,
+        performed_by=None,
+        occurred_at=datetime.fromisoformat(candidate["created_at"].replace("Z", "+00:00")),
+    ))
+
+    # Get applications and their history
+    applications = await client.select(
+        "applications",
+        "*",
+        filters={"candidate_id": str(candidate_id)},
+    ) or []
+
+    for app in applications:
+        job = await client.select(
+            "job_requisitions",
+            "external_title,requisition_number",
+            filters={"id": app["requisition_id"]},
+            single=True,
+        )
+        job_title = job.get("external_title", "Unknown") if job else "Unknown"
+
+        # Activity: Application submitted
+        activities.append(CandidateActivityLog(
+            id=UUID(app["id"]),
+            activity_type="application_submitted",
+            activity_description=f"Applied for {job_title}",
+            activity_data={"requisition_id": app["requisition_id"], "stage": app.get("current_stage")},
+            performed_by=None,
+            occurred_at=datetime.fromisoformat(app["applied_at"].replace("Z", "+00:00")),
+        ))
+
+    # Get resumes
+    resumes = await client.select(
+        "resumes",
+        "*",
+        filters={"candidate_id": str(candidate_id)},
+    ) or []
+
+    for resume in resumes:
+        activities.append(CandidateActivityLog(
+            id=UUID(resume["id"]),
+            activity_type="resume_uploaded",
+            activity_description=f"Resume uploaded: {resume.get('file_name', 'Unknown')}",
+            activity_data={"version": resume.get("version_number")},
+            performed_by=None,
+            occurred_at=datetime.fromisoformat(resume["uploaded_at"].replace("Z", "+00:00")),
+        ))
+
+    # Sort by occurred_at descending
+    activities.sort(key=lambda x: x.occurred_at, reverse=True)
+
+    return activities[:limit]
+
+
+@router.post("/{candidate_id}/convert-to-applicant", status_code=status.HTTP_201_CREATED)
+async def convert_to_applicant(
+    candidate_id: UUID,
+    request: ConvertToApplicantRequest,
+    current_user: TokenData = Depends(require_permission(Permission.APPLICATIONS_CREATE)),
+):
+    """Convert a candidate to an applicant for a specific job requisition.
+
+    Creates an application record linking the candidate to the job.
+    """
+    client = get_supabase_client()
+
+    # Verify candidate exists
+    candidate = await client.select(
+        "candidates",
+        "*",
+        filters={
+            "id": str(candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found",
+        )
+
+    # Verify job requisition exists and is open
+    job = await client.select(
+        "job_requisitions",
+        "*",
+        filters={
+            "id": str(request.requisition_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job requisition not found",
+        )
+
+    if job.get("status") != "open":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job requisition is not open for applications",
+        )
+
+    # Check for existing application
+    existing = await client.select(
+        "applications",
+        "id",
+        filters={
+            "candidate_id": str(candidate_id),
+            "requisition_id": str(request.requisition_id),
+        },
+        single=True,
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Candidate already has an application for this job",
+        )
+
+    # Get initial pipeline stage
+    stages = await client.select(
+        "pipeline_stages",
+        "*",
+        filters={"requisition_id": str(request.requisition_id)},
+    ) or []
+
+    stages.sort(key=lambda x: x.get("sort_order", 0))
+    initial_stage = stages[0] if stages else None
+    initial_stage_name = initial_stage["name"] if initial_stage else "Applied"
+    initial_stage_id = initial_stage["id"] if initial_stage else None
+
+    # Create application
+    # Note: applications table has source_id (UUID FK) not source (string)
+    # We store the source info in metadata for now, as we don't have source lookup here
+    now = datetime.now(timezone.utc)
+    application_dict = {
+        "tenant_id": str(current_user.tenant_id),
+        "candidate_id": str(candidate_id),
+        "requisition_id": str(request.requisition_id),
+        "applied_at": now.isoformat(),
+        "current_stage": initial_stage_name,
+        "current_stage_id": str(initial_stage_id) if initial_stage_id else None,
+        "stage_entered_at": now.isoformat(),
+        "status": "new",
+        "metadata": {
+            "source_text": request.source or candidate.get("source") or "sourced",
+            "conversion_notes": request.notes,
+            "converted_from_candidate": True,
+        },
+        "last_activity_at": now.isoformat(),
+    }
+
+    application = await client.insert("applications", application_dict)
+
+    # Update candidate's total_applications count
+    current_count = candidate.get("total_applications", 0)
+    await client.update(
+        "candidates",
+        {"total_applications": current_count + 1},
+        filters={"id": str(candidate_id)},
+    )
+
+    return {
+        "message": "Candidate converted to applicant successfully",
+        "application_id": application["id"],
+        "requisition_id": str(request.requisition_id),
+        "job_title": job.get("external_title"),
+        "initial_stage": initial_stage_name,
+    }

@@ -8,8 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.database import init_db
 from app.shared.routers import auth, health, users
-from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks
+from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports
 from app.admin.routers import config as admin_config
+from app.integrations import router as integrations_router
 
 
 settings = get_settings()
@@ -95,11 +96,54 @@ app.include_router(
     tags=["Recruiting - Tasks"],
 )
 
+app.include_router(
+    assignments.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/assignments",
+    tags=["Recruiting - Assignments"],
+)
+
+app.include_router(
+    resumes.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/resumes",
+    tags=["Recruiting - Resumes"],
+)
+
+app.include_router(
+    matching.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/matching",
+    tags=["Recruiting - AI Matching"],
+)
+
+app.include_router(
+    bulk.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/bulk",
+    tags=["Recruiting - Bulk Operations"],
+)
+
+app.include_router(
+    offers.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/offers",
+    tags=["Recruiting - Offers"],
+)
+
+app.include_router(
+    reports.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/reports",
+    tags=["Recruiting - Reports"],
+)
+
 # Admin module
 app.include_router(
     admin_config.router,
     prefix=f"{settings.api_v1_prefix}/admin",
     tags=["Admin - Configuration"],
+)
+
+# Integrations module
+app.include_router(
+    integrations_router.router,
+    prefix=f"{settings.api_v1_prefix}/integrations",
+    tags=["Integrations"],
 )
 
 

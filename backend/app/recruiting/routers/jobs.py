@@ -1,7 +1,8 @@
 """Job requisitions router - using Supabase REST API."""
 
+import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +21,18 @@ from app.recruiting.schemas.job import (
 from app.shared.schemas.common import PaginatedResponse
 
 router = APIRouter()
+
+
+def parse_jsonb_fields(data: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    """Parse JSONB fields that may come as strings from Supabase REST API."""
+    result = data.copy()
+    for field in fields:
+        if field in result and isinstance(result[field], str):
+            try:
+                result[field] = json.loads(result[field])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return result
 
 
 # Default pipeline stages
@@ -186,6 +199,9 @@ async def get_job(
             detail="Job requisition not found",
         )
 
+    # Parse JSONB fields that may come as strings from Supabase REST API
+    job = parse_jsonb_fields(job, ["pipeline_stages", "posting_urls", "metadata"])
+
     return JobRequisitionResponse.model_validate(job)
 
 
@@ -225,6 +241,9 @@ async def update_job(
             update_data,
             filters={"id": str(job_id)},
         )
+
+    # Parse JSONB fields that may come as strings from Supabase REST API
+    job = parse_jsonb_fields(job, ["pipeline_stages", "posting_urls", "metadata"])
 
     return JobRequisitionResponse.model_validate(job)
 
@@ -272,6 +291,9 @@ async def update_job_status(
         update_data,
         filters={"id": str(job_id)},
     )
+
+    # Parse JSONB fields that may come as strings from Supabase REST API
+    job = parse_jsonb_fields(job, ["pipeline_stages", "posting_urls", "metadata"])
 
     return JobRequisitionResponse.model_validate(job)
 

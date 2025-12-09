@@ -107,3 +107,48 @@ class CandidateSearchResult(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CandidateApplicationHistory(BaseModel):
+    """Application history for a candidate."""
+
+    application_id: UUID
+    requisition_id: UUID
+    requisition_number: str
+    job_title: str
+    applied_at: datetime
+    current_stage: str
+    status: str
+    days_in_pipeline: int
+
+
+class CandidateMatchingJob(BaseModel):
+    """A job that matches a candidate's profile."""
+
+    requisition_id: UUID
+    requisition_number: str
+    job_title: str
+    department_name: Optional[str] = None
+    location: Optional[str] = None
+    match_score: Optional[float] = None  # 0.0 to 1.0
+    match_reasons: Optional[List[str]] = None
+    job_status: str
+
+
+class CandidateActivityLog(BaseModel):
+    """Activity log entry for a candidate."""
+
+    id: UUID
+    activity_type: str  # 'application_submitted', 'stage_change', 'interview_scheduled', 'note_added', etc.
+    activity_description: str
+    activity_data: Optional[dict] = None
+    performed_by: Optional[str] = None  # User name
+    occurred_at: datetime
+
+
+class ConvertToApplicantRequest(BaseModel):
+    """Request to convert a candidate to an applicant for a job."""
+
+    requisition_id: UUID = Field(..., description="Job requisition to apply for")
+    source: Optional[str] = Field(None, description="Application source override")
+    notes: Optional[str] = Field(None, description="Notes about the application")

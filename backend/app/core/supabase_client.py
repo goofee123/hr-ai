@@ -171,6 +171,84 @@ class SupabaseClient:
             single=True,
         )
 
+    async def query(
+        self,
+        table: str,
+        columns: str = "*",
+        filters: Optional[Dict[str, Any]] = None,
+        order: Optional[str] = None,
+        order_desc: bool = False,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query rows from a table with more options.
+
+        Args:
+            table: Table name
+            columns: Columns to select (default: *)
+            filters: Dict of column=value filters (supports 'eq.', 'in.', 'neq.' etc)
+            order: Column to order by
+            order_desc: If True, order descending
+            limit: Max rows to return
+            offset: Number of rows to skip
+
+        Returns:
+            List of rows
+        """
+        params = {"select": columns}
+
+        # Build filter query params
+        if filters:
+            for key, value in filters.items():
+                # If value already has operator prefix, use as-is
+                if isinstance(value, str) and any(value.startswith(op) for op in ['eq.', 'neq.', 'in.', 'gt.', 'gte.', 'lt.', 'lte.', 'like.', 'ilike.']):
+                    params[key] = value
+                else:
+                    params[key] = f"eq.{value}"
+
+        if order:
+            params["order"] = f"{order}.desc" if order_desc else f"{order}.asc"
+
+        if limit:
+            params["limit"] = limit
+
+        if offset:
+            params["offset"] = offset
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.url}/rest/v1/{table}",
+                headers=self.headers,
+                params=params,
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def rpc(
+        self,
+        function_name: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Call a database function via RPC.
+
+        Args:
+            function_name: Name of the function
+            params: Function parameters
+
+        Returns:
+            Function result
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.url}/rest/v1/rpc/{function_name}",
+                headers=self.headers,
+                json=params or {},
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
 
 # Singleton instance
 _supabase_client: Optional[SupabaseClient] = None
