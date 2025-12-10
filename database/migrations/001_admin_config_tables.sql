@@ -123,8 +123,8 @@ CREATE TABLE IF NOT EXISTS sla_alerts (
 -- EEO data collection (separate from candidate for privacy)
 CREATE TABLE IF NOT EXISTS eeo_responses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    application_id UUID NOT NULL,
     gender VARCHAR(50),
     ethnicity VARCHAR(100),
     veteran_status VARCHAR(50),

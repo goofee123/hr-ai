@@ -93,7 +93,7 @@ async def create_offer(
             "expiration_date": request.expiration_date,
             "status": "draft",
             "notes": request.notes,
-            "created_by": str(current_user.sub),
+            "created_by": str(current_user.user_id),
             "created_at": now,
             "updated_at": now,
         }
@@ -325,7 +325,7 @@ async def submit_for_approval(
             json={
                 "status": "pending_approval",
                 "submitted_at": now,
-                "submitted_by": str(current_user.sub),
+                "submitted_by": str(current_user.user_id),
                 "updated_at": now,
             },
             timeout=15,
@@ -385,7 +385,7 @@ async def handle_approval(
             params={"id": f"eq.{offer_id}"},
             json={
                 "status": new_status,
-                "approved_by": str(current_user.sub),
+                "approved_by": str(current_user.user_id),
                 "approved_at": now,
                 "approval_notes": request.notes,
                 "updated_at": now,
@@ -453,7 +453,7 @@ async def send_offer(
             json={
                 "status": "sent",
                 "sent_at": now,
-                "sent_by": str(current_user.sub),
+                "sent_by": str(current_user.user_id),
                 "updated_at": now,
             },
             timeout=15,

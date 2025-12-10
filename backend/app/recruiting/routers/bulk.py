@@ -100,7 +100,7 @@ async def bulk_stage_change(
                         "application_id": str(app_id),
                         "from_stage": old_stage,
                         "to_stage": request.target_stage,
-                        "changed_by": str(current_user.sub),
+                        "changed_by": str(current_user.user_id),
                         "notes": request.notes or f"Bulk stage change to {request.target_stage}",
                         "created_at": now,
                     }
@@ -180,7 +180,7 @@ async def bulk_reject(
                     "rejection_reason": request.rejection_reason,
                     "rejection_notes": request.notes,
                     "rejected_at": now,
-                    "rejected_by": str(current_user.sub),
+                    "rejected_by": str(current_user.user_id),
                     "updated_at": now,
                 }
 
@@ -204,7 +204,7 @@ async def bulk_reject(
                         "application_id": str(app_id),
                         "from_stage": app_data.get("current_stage"),
                         "to_stage": "rejected",
-                        "changed_by": str(current_user.sub),
+                        "changed_by": str(current_user.user_id),
                         "notes": request.notes or "Bulk rejection",
                         "created_at": now,
                     }

@@ -93,6 +93,22 @@ class Permission(str, Enum):
     ADMIN_APPLICATION_SOURCES = "admin:application_sources"
     ADMIN_SLA_SETTINGS = "admin:sla_settings"
 
+    # EEO Compliance (restricted to HR Admin only)
+    EEO_VIEW = "eeo:view"
+    EEO_REPORTS = "eeo:reports"
+    EEO_EXPORT = "eeo:export"
+    EEO_AUDIT = "eeo:audit"
+
+    # General Recruiting Permissions (for interview scheduling, etc.)
+    RECRUITING_READ = "recruiting:read"
+    RECRUITING_WRITE = "recruiting:write"
+    RECRUITING_REPORTS = "recruiting:reports"
+
+    # Interview-specific permissions
+    INTERVIEWS_VIEW = "interviews:view"
+    INTERVIEWS_SCHEDULE = "interviews:schedule"
+    INTERVIEWS_MANAGE = "interviews:manage"
+
 
 # Role to permissions mapping
 ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
@@ -122,6 +138,14 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.TASKS_COMPLETE,
         Permission.WORKLOAD_VIEW,
         Permission.WORKLOAD_ASSIGN,
+        # General Recruiting
+        Permission.RECRUITING_READ,
+        Permission.RECRUITING_WRITE,
+        Permission.RECRUITING_REPORTS,
+        # Interview Scheduling
+        Permission.INTERVIEWS_VIEW,
+        Permission.INTERVIEWS_SCHEDULE,
+        Permission.INTERVIEWS_MANAGE,
         # Compensation
         Permission.CYCLES_VIEW,
         Permission.CYCLES_CREATE,
@@ -144,6 +168,11 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.ADMIN_DISPOSITION_REASONS,
         Permission.ADMIN_APPLICATION_SOURCES,
         Permission.ADMIN_SLA_SETTINGS,
+        # EEO Compliance
+        Permission.EEO_VIEW,
+        Permission.EEO_REPORTS,
+        Permission.EEO_EXPORT,
+        Permission.EEO_AUDIT,
     },
     UserRole.RECRUITER: {
         Permission.JOBS_VIEW,
@@ -161,6 +190,14 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.TASKS_EDIT,
         Permission.TASKS_DELETE,
         Permission.TASKS_COMPLETE,
+        # General Recruiting
+        Permission.RECRUITING_READ,
+        Permission.RECRUITING_WRITE,
+        Permission.RECRUITING_REPORTS,
+        # Interview Scheduling
+        Permission.INTERVIEWS_VIEW,
+        Permission.INTERVIEWS_SCHEDULE,
+        Permission.INTERVIEWS_MANAGE,
     },
     UserRole.HIRING_MANAGER: {
         Permission.JOBS_VIEW,
@@ -172,6 +209,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.TASKS_VIEW,
         Permission.WORKSHEET_VIEW_OWN,
         Permission.WORKSHEET_EDIT,
+        # Recruiting read (for interviews)
+        Permission.RECRUITING_READ,
+        Permission.INTERVIEWS_VIEW,
     },
     UserRole.COMPENSATION_ANALYST: {
         Permission.CYCLES_VIEW,

@@ -1,10 +1,12 @@
 """Candidates router - using Supabase REST API."""
 
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel, EmailStr, Field
 
 from app.core.permissions import Permission, require_permission
 from app.core.security import TokenData
@@ -21,9 +23,66 @@ from app.recruiting.schemas.candidate import (
     ConvertToApplicantRequest,
     ResumeResponse,
 )
+from app.recruiting.services.candidate_deduplication import (
+    CandidateDeduplicationService,
+    MatchConfidence,
+    candidate_deduplication_service,
+)
 from app.shared.schemas.common import PaginatedResponse
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+# ============================================================================
+# Deduplication Schemas
+# ============================================================================
+
+class DeduplicationCheckRequest(BaseModel):
+    """Request to check for duplicate candidates."""
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    first_name: str = ""
+    last_name: str = ""
+
+
+class DeduplicationCheckResponse(BaseModel):
+    """Response from deduplication check."""
+    is_duplicate: bool
+    existing_candidate_id: Optional[UUID] = None
+    confidence: str  # exact, high, medium, low, none
+    match_reasons: List[str]
+    suggested_action: str  # create_new, update_existing, merge_required, review_required
+
+
+class CandidateMergeRequest(BaseModel):
+    """Request to merge candidate profiles."""
+    source_candidate_id: UUID = Field(..., description="Candidate to merge FROM (will be deleted)")
+    target_candidate_id: UUID = Field(..., description="Candidate to merge INTO (will be kept)")
+    merge_strategy: str = Field(
+        default="smart_merge",
+        description="How to merge: 'prefer_new', 'prefer_existing', 'smart_merge'"
+    )
+
+
+class CandidateSubmitOrUpdateRequest(BaseModel):
+    """Request for smart candidate submit - creates new or updates existing."""
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    location: Optional[dict] = None
+    source: Optional[str] = None
+    source_detail: Optional[str] = None
+    skills: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    force_create: bool = Field(
+        default=False,
+        description="Force create new candidate even if duplicate detected"
+    )
 
 
 @router.get("", response_model=PaginatedResponse[CandidateSearchResult])
@@ -774,4 +833,387 @@ async def convert_to_applicant(
         "requisition_id": str(request.requisition_id),
         "job_title": job.get("external_title"),
         "initial_stage": initial_stage_name,
+    }
+
+
+# ============================================================================
+# Deduplication Endpoints
+# ============================================================================
+
+@router.post("/check-duplicate", response_model=DeduplicationCheckResponse)
+async def check_duplicate_candidate(
+    request: DeduplicationCheckRequest,
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Check if a candidate already exists based on email, phone, or LinkedIn.
+
+    Use this endpoint before creating a candidate to detect duplicates.
+    Returns match confidence and suggested action.
+    """
+    result = await candidate_deduplication_service.find_duplicates(
+        tenant_id=current_user.tenant_id,
+        email=request.email,
+        phone=request.phone,
+        linkedin_url=request.linkedin_url,
+        first_name=request.first_name,
+        last_name=request.last_name,
+    )
+
+    return DeduplicationCheckResponse(
+        is_duplicate=result.is_duplicate,
+        existing_candidate_id=result.existing_candidate_id,
+        confidence=result.confidence.value,
+        match_reasons=result.match_reasons,
+        suggested_action=result.suggested_action,
+    )
+
+
+@router.post("/submit-or-update")
+async def submit_or_update_candidate(
+    request: CandidateSubmitOrUpdateRequest,
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_CREATE)),
+):
+    """Smart candidate submission - creates new or updates existing.
+
+    This endpoint handles the common scenario where a candidate resubmits:
+    1. Checks for existing candidate by email/phone/LinkedIn
+    2. If exact match (same email), updates existing profile
+    3. If high confidence match, updates existing profile
+    4. If medium/low confidence, returns for review (unless force_create=True)
+    5. If no match, creates new candidate
+
+    Use this for public application forms and bulk imports.
+    """
+    client = get_supabase_client()
+
+    # Check for duplicates
+    dedup_result = await candidate_deduplication_service.find_duplicates(
+        tenant_id=current_user.tenant_id,
+        email=request.email,
+        phone=request.phone,
+        linkedin_url=request.linkedin_url,
+        first_name=request.first_name,
+        last_name=request.last_name,
+    )
+
+    candidate_data = request.model_dump(exclude={"force_create"})
+
+    # Case 1: No duplicate found - create new
+    if not dedup_result.is_duplicate:
+        candidate_dict = {
+            "tenant_id": str(current_user.tenant_id),
+            **candidate_data,
+        }
+        candidate = await client.insert("candidates", candidate_dict)
+
+        logger.info(f"Created new candidate {candidate['id']} - no duplicate found")
+
+        return {
+            "action": "created",
+            "candidate_id": candidate["id"],
+            "message": "New candidate created",
+        }
+
+    # Case 2: Exact or high confidence match - update existing
+    if dedup_result.confidence in [MatchConfidence.EXACT, MatchConfidence.HIGH]:
+        merge_result = await candidate_deduplication_service.merge_candidate_profiles(
+            tenant_id=current_user.tenant_id,
+            existing_candidate_id=dedup_result.existing_candidate_id,
+            new_candidate_data=candidate_data,
+            merge_strategy="smart_merge",
+        )
+
+        logger.info(
+            f"Updated existing candidate {dedup_result.existing_candidate_id} - "
+            f"confidence: {dedup_result.confidence.value}"
+        )
+
+        return {
+            "action": "updated",
+            "candidate_id": str(dedup_result.existing_candidate_id),
+            "message": f"Existing candidate updated (match confidence: {dedup_result.confidence.value})",
+            "match_reasons": dedup_result.match_reasons,
+        }
+
+    # Case 3: Medium/low confidence match - require review or force create
+    if request.force_create:
+        candidate_dict = {
+            "tenant_id": str(current_user.tenant_id),
+            **candidate_data,
+        }
+        candidate = await client.insert("candidates", candidate_dict)
+
+        logger.info(
+            f"Force created new candidate {candidate['id']} despite potential duplicate "
+            f"{dedup_result.existing_candidate_id}"
+        )
+
+        return {
+            "action": "force_created",
+            "candidate_id": candidate["id"],
+            "message": "New candidate created (potential duplicate ignored)",
+            "potential_duplicate_id": str(dedup_result.existing_candidate_id),
+            "match_confidence": dedup_result.confidence.value,
+            "match_reasons": dedup_result.match_reasons,
+        }
+
+    # Return for review
+    return {
+        "action": "review_required",
+        "candidate_id": None,
+        "potential_duplicate_id": str(dedup_result.existing_candidate_id),
+        "message": "Potential duplicate detected - review required",
+        "match_confidence": dedup_result.confidence.value,
+        "match_reasons": dedup_result.match_reasons,
+        "suggested_action": dedup_result.suggested_action,
+    }
+
+
+@router.get("/duplicates")
+async def list_potential_duplicates(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """List potential duplicate candidate pairs for manual review.
+
+    Returns pairs of candidates that might be duplicates based on:
+    - Same phone number
+    - Same name
+    - Same LinkedIn profile
+    - High skill overlap
+
+    Use this for data cleanup and deduplication maintenance.
+    """
+    result = await candidate_deduplication_service.get_duplicate_candidates_for_review(
+        tenant_id=current_user.tenant_id,
+        page=page,
+        page_size=page_size,
+    )
+
+    return result
+
+
+@router.post("/merge")
+async def merge_candidates(
+    request: CandidateMergeRequest,
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_EDIT)),
+):
+    """Merge two candidate profiles into one.
+
+    Merges source_candidate into target_candidate:
+    - Source candidate data is merged into target
+    - Source candidate's applications are transferred to target
+    - Source candidate's resumes are transferred to target
+    - Source candidate is then deleted
+
+    This is a destructive operation - use with caution.
+    """
+    client = get_supabase_client()
+
+    # Verify both candidates exist
+    source = await client.select(
+        "candidates",
+        "*",
+        filters={
+            "id": str(request.source_candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    target = await client.select(
+        "candidates",
+        "*",
+        filters={
+            "id": str(request.target_candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source candidate {request.source_candidate_id} not found",
+        )
+
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target candidate {request.target_candidate_id} not found",
+        )
+
+    # Merge profiles
+    merge_result = await candidate_deduplication_service.merge_candidate_profiles(
+        tenant_id=current_user.tenant_id,
+        existing_candidate_id=request.target_candidate_id,
+        new_candidate_data=source,
+        merge_strategy=request.merge_strategy,
+    )
+
+    # Transfer applications from source to target
+    source_apps = await client.select(
+        "applications",
+        "id",
+        filters={"candidate_id": str(request.source_candidate_id)},
+    ) or []
+
+    apps_transferred = 0
+    for app in source_apps:
+        await client.update(
+            "applications",
+            {"candidate_id": str(request.target_candidate_id)},
+            filters={"id": app["id"]},
+        )
+        apps_transferred += 1
+
+    # Transfer resumes from source to target
+    source_resumes = await client.select(
+        "resumes",
+        "id,version_number",
+        filters={"candidate_id": str(request.source_candidate_id)},
+    ) or []
+
+    # Get max version on target
+    target_resumes = await client.select(
+        "resumes",
+        "version_number",
+        filters={"candidate_id": str(request.target_candidate_id)},
+    ) or []
+    max_version = max([r.get("version_number", 0) for r in target_resumes], default=0)
+
+    resumes_transferred = 0
+    for resume in source_resumes:
+        max_version += 1
+        await client.update(
+            "resumes",
+            {
+                "candidate_id": str(request.target_candidate_id),
+                "version_number": max_version,
+                "is_primary": False,  # Don't override target's primary resume
+            },
+            filters={"id": resume["id"]},
+        )
+        resumes_transferred += 1
+
+    # Update target's total_applications count
+    new_total = target.get("total_applications", 0) + apps_transferred
+    await client.update(
+        "candidates",
+        {"total_applications": new_total},
+        filters={"id": str(request.target_candidate_id)},
+    )
+
+    # Delete source candidate
+    await client.delete("candidates", filters={"id": str(request.source_candidate_id)})
+
+    logger.info(
+        f"Merged candidate {request.source_candidate_id} into {request.target_candidate_id}. "
+        f"Transferred {apps_transferred} applications, {resumes_transferred} resumes."
+    )
+
+    return {
+        "message": "Candidates merged successfully",
+        "target_candidate_id": str(request.target_candidate_id),
+        "source_candidate_id": str(request.source_candidate_id),
+        "applications_transferred": apps_transferred,
+        "resumes_transferred": resumes_transferred,
+        "merge_strategy": request.merge_strategy,
+    }
+
+
+@router.get("/{candidate_id}/history")
+async def get_candidate_profile_history(
+    candidate_id: UUID,
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Get the history of a candidate's profile updates.
+
+    Shows all resume versions and when profile data was updated.
+    Useful for seeing how a candidate's profile evolved over time.
+    """
+    client = get_supabase_client()
+
+    # Verify candidate exists
+    candidate = await client.select(
+        "candidates",
+        "*",
+        filters={
+            "id": str(candidate_id),
+            "tenant_id": str(current_user.tenant_id),
+        },
+        single=True,
+    )
+
+    if not candidate:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found",
+        )
+
+    # Get all resumes (sorted by version)
+    resumes = await client.select(
+        "resumes",
+        "id,file_name,version_number,is_primary,parsing_status,parsed_data,uploaded_at",
+        filters={"candidate_id": str(candidate_id)},
+    ) or []
+
+    resumes.sort(key=lambda x: x.get("version_number", 0))
+
+    # Build history timeline
+    history = []
+
+    # Add candidate creation
+    history.append({
+        "event_type": "profile_created",
+        "occurred_at": candidate.get("created_at"),
+        "details": {
+            "name": f"{candidate.get('first_name')} {candidate.get('last_name')}",
+            "email": candidate.get("email"),
+            "source": candidate.get("source"),
+        },
+    })
+
+    # Add resume uploads
+    for resume in resumes:
+        parsed_data = resume.get("parsed_data", {})
+        history.append({
+            "event_type": "resume_uploaded",
+            "occurred_at": resume.get("uploaded_at"),
+            "details": {
+                "file_name": resume.get("file_name"),
+                "version": resume.get("version_number"),
+                "is_current_primary": resume.get("is_primary"),
+                "parsing_status": resume.get("parsing_status"),
+                "extracted_title": parsed_data.get("experience", [{}])[0].get("title") if parsed_data.get("experience") else None,
+                "extracted_company": parsed_data.get("experience", [{}])[0].get("company") if parsed_data.get("experience") else None,
+                "skills_count": len(parsed_data.get("skills", [])) if isinstance(parsed_data.get("skills"), list) else 0,
+            },
+        })
+
+    # Add profile update if updated_at differs from created_at
+    if candidate.get("updated_at") and candidate.get("updated_at") != candidate.get("created_at"):
+        history.append({
+            "event_type": "profile_updated",
+            "occurred_at": candidate.get("updated_at"),
+            "details": {
+                "note": "Profile data was updated",
+            },
+        })
+
+    # Sort by date
+    history.sort(key=lambda x: x.get("occurred_at", ""), reverse=True)
+
+    return {
+        "candidate_id": str(candidate_id),
+        "current_profile": {
+            "name": f"{candidate.get('first_name')} {candidate.get('last_name')}",
+            "email": candidate.get("email"),
+            "phone": candidate.get("phone"),
+            "skills": candidate.get("skills"),
+            "total_applications": candidate.get("total_applications"),
+            "resume_versions": len(resumes),
+        },
+        "history": history,
     }

@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # External Integrations
     affinda_api_key: Optional[str] = None
     sendgrid_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+
+    # Email Configuration
+    email_from_address: str = "noreply@bhcorp.com"
+    email_from_name: str = "BH Recruiting"
 
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:8000"

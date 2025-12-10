@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.database import init_db
 from app.shared.routers import auth, health, users
-from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports
+from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports, eeo, scorecards, comments, red_flags, offer_declines, interviews, candidate_portal
 from app.admin.routers import config as admin_config
 from app.integrations import router as integrations_router
 
@@ -130,6 +130,48 @@ app.include_router(
     reports.router,
     prefix=f"{settings.api_v1_prefix}/recruiting/reports",
     tags=["Recruiting - Reports"],
+)
+
+app.include_router(
+    eeo.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/eeo",
+    tags=["Recruiting - EEO Compliance"],
+)
+
+app.include_router(
+    scorecards.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/scorecards",
+    tags=["Recruiting - Scorecards & Feedback"],
+)
+
+app.include_router(
+    comments.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/comments",
+    tags=["Recruiting - Comments"],
+)
+
+app.include_router(
+    red_flags.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/red-flags",
+    tags=["Recruiting - Red Flags"],
+)
+
+app.include_router(
+    offer_declines.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/offer-declines",
+    tags=["Recruiting - Offer Declines"],
+)
+
+app.include_router(
+    interviews.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/interviews",
+    tags=["Recruiting - Interview Scheduling"],
+)
+
+app.include_router(
+    candidate_portal.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/portal",
+    tags=["Recruiting - Candidate Portal (Public)"],
 )
 
 # Admin module

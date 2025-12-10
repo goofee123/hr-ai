@@ -817,3 +817,177 @@ async def delete_sla_configuration(
     await client.delete("sla_configurations", filters={"id": str(config_id)})
 
     return None
+
+
+# ====================================================================
+# TENANT SETTINGS
+# ====================================================================
+
+
+@router.get("/settings")
+async def get_tenant_settings(
+    current_user: TokenData = Depends(require_permission(Permission.ADMIN_SLA_SETTINGS)),
+):
+    """Get all settings for the current tenant."""
+    client = get_supabase_client()
+
+    settings = await client.select(
+        "tenant_settings",
+        "*",
+        filters={"tenant_id": str(current_user.tenant_id)},
+        single=True,
+    )
+
+    if not settings:
+        # Create default settings if none exist
+        default_settings = {
+            "tenant_id": str(current_user.tenant_id),
+            "candidate_portal": json.dumps({
+                "enabled": True,
+                "allow_status_check": True,
+                "allow_document_upload": True,
+                "allow_interview_reschedule": True,
+                "require_eeo_form": True,
+            }),
+            "calendar_integration": json.dumps({
+                "enabled": False,
+                "google_calendar_enabled": False,
+                "outlook_calendar_enabled": False,
+                "auto_create_video_meeting": True,
+            }),
+            "notifications": json.dumps({
+                "send_candidate_status_emails": True,
+                "send_interview_reminders": True,
+                "reminder_hours_before": [24, 1],
+                "send_offer_emails": True,
+                "send_rejection_emails": False,
+                "rejection_email_delay_hours": 48,
+            }),
+            "ai_features": json.dumps({
+                "resume_parsing_enabled": True,
+                "candidate_matching_enabled": True,
+                "skill_extraction_enabled": True,
+                "auto_screen_candidates": False,
+            }),
+            "compliance": json.dumps({
+                "eeo_tracking_enabled": True,
+                "audit_logging_enabled": True,
+                "require_rejection_reason": True,
+                "data_retention_days": 365,
+            }),
+            "custom_settings": json.dumps({}),
+        }
+        settings = await client.insert("tenant_settings", default_settings)
+
+    # Parse JSONB fields
+    for field in ["candidate_portal", "calendar_integration", "notifications", "ai_features", "compliance", "custom_settings"]:
+        if field in settings and isinstance(settings[field], str):
+            settings[field] = json.loads(settings[field])
+
+    return settings
+
+
+@router.patch("/settings")
+async def update_tenant_settings(
+    update_data: Dict[str, Any],
+    current_user: TokenData = Depends(require_permission(Permission.ADMIN_SLA_SETTINGS)),
+):
+    """
+    Update tenant settings.
+
+    Supports partial updates - only provided fields will be updated.
+    """
+    client = get_supabase_client()
+
+    # Get existing settings
+    existing = await client.select(
+        "tenant_settings",
+        "id",
+        filters={"tenant_id": str(current_user.tenant_id)},
+        single=True,
+    )
+
+    # Prepare update data - serialize JSONB fields
+    serialized_data = {}
+    for field in ["candidate_portal", "calendar_integration", "notifications", "ai_features", "compliance", "custom_settings"]:
+        if field in update_data and update_data[field] is not None:
+            serialized_data[field] = json.dumps(update_data[field])
+
+    if not serialized_data:
+        # Get and return current settings
+        return await get_tenant_settings(current_user)
+
+    if existing:
+        # Update existing
+        settings = await client.update(
+            "tenant_settings",
+            serialized_data,
+            filters={"tenant_id": str(current_user.tenant_id)},
+        )
+    else:
+        # Create new with defaults + updates
+        default_settings = {
+            "tenant_id": str(current_user.tenant_id),
+            "candidate_portal": json.dumps({"enabled": True}),
+            "calendar_integration": json.dumps({"enabled": False}),
+            "notifications": json.dumps({"send_candidate_status_emails": True}),
+            "ai_features": json.dumps({"resume_parsing_enabled": True}),
+            "compliance": json.dumps({"eeo_tracking_enabled": True}),
+            "custom_settings": json.dumps({}),
+        }
+        default_settings.update(serialized_data)
+        settings = await client.insert("tenant_settings", default_settings)
+
+    # Parse JSONB fields for response
+    for field in ["candidate_portal", "calendar_integration", "notifications", "ai_features", "compliance", "custom_settings"]:
+        if field in settings and isinstance(settings[field], str):
+            settings[field] = json.loads(settings[field])
+
+    return settings
+
+
+@router.get("/settings/candidate-portal")
+async def get_candidate_portal_settings(
+    current_user: TokenData = Depends(require_permission(Permission.ADMIN_SLA_SETTINGS)),
+):
+    """Get candidate portal settings specifically."""
+    client = get_supabase_client()
+
+    settings = await client.select(
+        "tenant_settings",
+        "candidate_portal",
+        filters={"tenant_id": str(current_user.tenant_id)},
+        single=True,
+    )
+
+    if not settings:
+        return {
+            "enabled": True,
+            "allow_status_check": True,
+            "allow_document_upload": True,
+            "allow_interview_reschedule": True,
+            "require_eeo_form": True,
+        }
+
+    portal_settings = settings.get("candidate_portal", {})
+    if isinstance(portal_settings, str):
+        portal_settings = json.loads(portal_settings)
+
+    return portal_settings
+
+
+@router.patch("/settings/candidate-portal")
+async def update_candidate_portal_settings(
+    portal_settings: Dict[str, Any],
+    current_user: TokenData = Depends(require_permission(Permission.ADMIN_SLA_SETTINGS)),
+):
+    """
+    Update candidate portal settings.
+
+    This endpoint allows toggling the candidate portal on/off in case
+    the client uses an external system like Dayforce.
+    """
+    return await update_tenant_settings(
+        {"candidate_portal": portal_settings},
+        current_user,
+    )
