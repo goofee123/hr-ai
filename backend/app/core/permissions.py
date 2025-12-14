@@ -109,6 +109,10 @@ class Permission(str, Enum):
     INTERVIEWS_SCHEDULE = "interviews:schedule"
     INTERVIEWS_MANAGE = "interviews:manage"
 
+    # Compensation - General (used by routers)
+    COMPENSATION_VIEW = "compensation:view"
+    COMPENSATION_MANAGE = "compensation:manage"
+
 
 # Role to permissions mapping
 ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
@@ -173,6 +177,9 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.EEO_REPORTS,
         Permission.EEO_EXPORT,
         Permission.EEO_AUDIT,
+        # Compensation General
+        Permission.COMPENSATION_VIEW,
+        Permission.COMPENSATION_MANAGE,
     },
     UserRole.RECRUITER: {
         Permission.JOBS_VIEW,
@@ -219,6 +226,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.SCENARIOS_CREATE,
         Permission.RULES_VIEW,
         Permission.WORKSHEET_VIEW_ALL,
+        Permission.COMPENSATION_VIEW,
     },
     UserRole.EXECUTIVE: {
         Permission.JOBS_VIEW,
@@ -226,6 +234,7 @@ ROLE_PERMISSIONS: dict[UserRole, set[Permission]] = {
         Permission.SCENARIOS_VIEW,
         Permission.SCENARIOS_SELECT,
         Permission.WORKSHEET_VIEW_ALL,
+        Permission.COMPENSATION_VIEW,
     },
     UserRole.PAYROLL: {
         Permission.CYCLES_VIEW,

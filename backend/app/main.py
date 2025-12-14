@@ -8,9 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.database import init_db
 from app.shared.routers import auth, health, users
-from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports, eeo, scorecards, comments, red_flags, offer_declines, interviews, candidate_portal
+from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports, eeo, scorecards, comments, red_flags, offer_declines, interviews, candidate_portal, observations
 from app.admin.routers import config as admin_config
 from app.integrations import router as integrations_router
+from app.compensation.routers import cycles as comp_cycles, rules as comp_rules, scenarios as comp_scenarios, worksheets as comp_worksheets, data_import as comp_import
 
 
 settings = get_settings()
@@ -174,6 +175,12 @@ app.include_router(
     tags=["Recruiting - Candidate Portal (Public)"],
 )
 
+app.include_router(
+    observations.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting",
+    tags=["Recruiting - Observations & Activity"],
+)
+
 # Admin module
 app.include_router(
     admin_config.router,
@@ -186,6 +193,37 @@ app.include_router(
     integrations_router.router,
     prefix=f"{settings.api_v1_prefix}/integrations",
     tags=["Integrations"],
+)
+
+# Compensation module
+app.include_router(
+    comp_cycles.router,
+    prefix=f"{settings.api_v1_prefix}/compensation/cycles",
+    tags=["Compensation - Cycles"],
+)
+
+app.include_router(
+    comp_rules.router,
+    prefix=f"{settings.api_v1_prefix}/compensation/rules",
+    tags=["Compensation - Rules"],
+)
+
+app.include_router(
+    comp_scenarios.router,
+    prefix=f"{settings.api_v1_prefix}/compensation/scenarios",
+    tags=["Compensation - Scenarios"],
+)
+
+app.include_router(
+    comp_worksheets.router,
+    prefix=f"{settings.api_v1_prefix}/compensation/worksheets",
+    tags=["Compensation - Worksheets"],
+)
+
+app.include_router(
+    comp_import.router,
+    prefix=f"{settings.api_v1_prefix}/compensation/import",
+    tags=["Compensation - Data Import"],
 )
 
 
