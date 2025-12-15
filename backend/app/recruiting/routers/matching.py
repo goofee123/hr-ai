@@ -8,6 +8,7 @@ from app.core.permissions import Permission, require_permission
 from app.core.security import TokenData
 from app.recruiting.services.matching_service import get_matching_service
 from app.recruiting.services.embedding_service import get_embedding_service
+from app.recruiting.services.hybrid_matching_service import get_hybrid_matching_service
 from app.recruiting.schemas.matching import (
     MatchingCandidatesResponse,
     MatchingJobsResponse,
@@ -20,6 +21,11 @@ from app.recruiting.schemas.matching import (
     CandidateEmbeddingRequest,
     JobEmbeddingRequest,
     EmbeddingStatusResponse,
+    HybridMatchingRequest,
+    HybridMatchingResponse,
+    HybridMatchResult,
+    MatchingConfigResponse,
+    UpdateMatchingConfigRequest,
 )
 
 
@@ -380,3 +386,151 @@ async def delete_candidate_embeddings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete embeddings",
         )
+
+
+# =============================================================================
+# HYBRID MATCHING ENDPOINTS (Sprint R4 - Multi-stage pipeline with LLM rerank)
+# =============================================================================
+
+@router.post(
+    "/hybrid/jobs/{requisition_id}/matching-candidates",
+    response_model=HybridMatchingResponse,
+    summary="Find candidates using hybrid multi-stage matching",
+)
+async def get_hybrid_matching_candidates(
+    requisition_id: UUID,
+    limit: int = Query(10, ge=1, le=50),
+    use_llm_rerank: bool = Query(True, description="Use LLM for final reranking"),
+    min_experience: int = Query(None, ge=0, description="Minimum years of experience"),
+    location: str = Query(None, description="Location filter (partial match)"),
+    current_user: TokenData = Depends(require_permission(Permission.CANDIDATES_VIEW)),
+):
+    """Find best matching candidates using hybrid multi-stage pipeline.
+
+    Pipeline stages:
+    1. Hard Filters (SQL) - Apply location, experience, etc.
+    2. Skill Tag Match - Pre-indexed skill intersection
+    3. Embedding Similarity (pgvector) - Vector similarity scoring
+    4. LLM Rerank (optional) - Detailed reasoning on top candidates
+
+    This approach avoids expensive LLM calls on the full candidate pool
+    by only reranking the top candidates from earlier stages.
+
+    Returns candidates with:
+    - overall_score: Combined weighted score (0.0-1.0)
+    - match_breakdown: Component scores from each stage
+    - reasoning: LLM explanation (if use_llm_rerank=True)
+    - confidence_label: Human-readable confidence (Explicit, Very Likely, Inferred, Uncertain)
+    """
+    hybrid_service = get_hybrid_matching_service()
+
+    # Build filters
+    filters = {}
+    if min_experience is not None:
+        filters["min_experience"] = min_experience
+    if location:
+        filters["location"] = location
+
+    matches = await hybrid_service.get_recommended_candidates(
+        tenant_id=current_user.tenant_id,
+        requisition_id=requisition_id,
+        limit=limit,
+        use_llm_rerank=use_llm_rerank,
+        filters=filters if filters else None,
+    )
+
+    return HybridMatchingResponse(
+        requisition_id=requisition_id,
+        matches=[
+            HybridMatchResult(
+                candidate_id=m.candidate_id,
+                overall_score=m.overall_score,
+                match_breakdown=m.match_breakdown,
+                reasoning=m.reasoning,
+                model_name=m.model_name,
+                confidence_label=m.confidence_label,
+            )
+            for m in matches
+        ],
+        total_candidates_scanned=len(matches),  # Simplified - could track pipeline counts
+        pipeline_stages={
+            "final_results": len(matches),
+        },
+        llm_model_used=matches[0].model_name if matches and matches[0].model_name else None,
+    )
+
+
+@router.get(
+    "/config",
+    response_model=MatchingConfigResponse,
+    summary="Get matching configuration (read-only)",
+)
+async def get_matching_config(
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
+):
+    """Get current matching weights and thresholds.
+
+    All users can view the configuration. Only admins can modify it.
+    """
+    hybrid_service = get_hybrid_matching_service()
+    config = await hybrid_service.get_matching_config(current_user.tenant_id)
+
+    return MatchingConfigResponse(
+        skills_weight=config.skills_weight,
+        experience_weight=config.experience_weight,
+        embedding_weight=config.embedding_weight,
+        location_weight=config.location_weight,
+        recency_weight=config.recency_weight,
+        min_skill_match=config.min_skill_match,
+        min_embedding_score=config.min_embedding_score,
+        hard_filter_limit=config.hard_filter_limit,
+        skill_match_limit=config.skill_match_limit,
+        embedding_limit=config.embedding_limit,
+        llm_rerank_limit=config.llm_rerank_limit,
+    )
+
+
+@router.patch(
+    "/config",
+    response_model=MatchingConfigResponse,
+    summary="Update matching configuration (admin only)",
+)
+async def update_matching_config(
+    request: UpdateMatchingConfigRequest,
+    current_user: TokenData = Depends(require_permission(Permission.ADMIN_CONFIG)),
+):
+    """Update matching weights (admin only).
+
+    These weights affect how the hybrid matching pipeline scores candidates.
+    """
+    hybrid_service = get_hybrid_matching_service()
+
+    config_updates = {}
+    if request.skills_weight is not None:
+        config_updates["skills_weight"] = request.skills_weight
+    if request.experience_weight is not None:
+        config_updates["experience_weight"] = request.experience_weight
+    if request.embedding_weight is not None:
+        config_updates["embedding_weight"] = request.embedding_weight
+    if request.location_weight is not None:
+        config_updates["location_weight"] = request.location_weight
+    if request.recency_weight is not None:
+        config_updates["recency_weight"] = request.recency_weight
+
+    config = await hybrid_service.update_matching_config(
+        current_user.tenant_id, config_updates
+    )
+
+    return MatchingConfigResponse(
+        skills_weight=config.skills_weight,
+        experience_weight=config.experience_weight,
+        embedding_weight=config.embedding_weight,
+        location_weight=config.location_weight,
+        recency_weight=config.recency_weight,
+        min_skill_match=config.min_skill_match,
+        min_embedding_score=config.min_embedding_score,
+        hard_filter_limit=config.hard_filter_limit,
+        skill_match_limit=config.skill_match_limit,
+        embedding_limit=config.embedding_limit,
+        llm_rerank_limit=config.llm_rerank_limit,
+    )

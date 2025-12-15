@@ -33,7 +33,7 @@ router = APIRouter()
 @router.get("/candidates/{candidate_id}/emails", response_model=CandidateEmailsResponse)
 async def get_candidate_emails(
     candidate_id: UUID,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get all emails for a candidate."""
     service = get_observation_service()
@@ -60,7 +60,7 @@ async def get_candidate_emails(
 async def add_candidate_email(
     candidate_id: UUID,
     email_data: CandidateEmailCreate,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Add an email to a candidate."""
     service = get_observation_service()
@@ -84,7 +84,7 @@ async def add_candidate_email(
 async def update_candidate_email(
     email_id: UUID,
     email_data: CandidateEmailUpdate,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Update a candidate email."""
     service = get_observation_service()
@@ -104,7 +104,7 @@ async def update_candidate_email(
 @router.delete("/emails/{email_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_candidate_email(
     email_id: UUID,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Delete a candidate email."""
     service = get_observation_service()
@@ -122,7 +122,7 @@ async def delete_candidate_email(
 @router.get("/emails/lookup")
 async def find_candidate_by_email(
     email: str = Query(..., description="Email address to look up"),
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Find a candidate by email address."""
     service = get_observation_service()
@@ -149,7 +149,7 @@ async def find_candidate_by_email(
 )
 async def get_candidate_observations(
     candidate_id: UUID,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get all current observations for a candidate, grouped by field."""
     service = get_observation_service()
@@ -164,7 +164,7 @@ async def get_candidate_observations_all(
     candidate_id: UUID,
     current_only: bool = Query(True, description="Only return current observations"),
     field_name: Optional[str] = Query(None, description="Filter by field name"),
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get all observations for a candidate (including superseded if requested)."""
     service = get_observation_service()
@@ -181,7 +181,7 @@ async def get_candidate_observations_all(
 async def add_observation(
     candidate_id: UUID,
     observation_data: ObservationCreate,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Add an observation for a candidate."""
     service = get_observation_service()
@@ -204,7 +204,7 @@ async def add_observations_bulk(
     supersede_existing: bool = Query(
         True, description="Supersede existing observations"
     ),
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Add multiple observations for a candidate (e.g., from LLM extraction)."""
     service = get_observation_service()
@@ -224,7 +224,7 @@ async def add_observations_bulk(
 async def supersede_observation(
     observation_id: UUID,
     new_observation: ObservationCreate,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Supersede an observation with a new value."""
     service = get_observation_service()
@@ -247,7 +247,7 @@ async def supersede_observation(
 @router.delete("/observations/{observation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_observation(
     observation_id: UUID,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Delete an observation."""
     service = get_observation_service()
@@ -274,7 +274,7 @@ async def get_candidate_activity(
     event_types: Optional[str] = Query(
         None, description="Comma-separated event types to filter"
     ),
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get activity feed for a candidate."""
     tracker = get_activity_tracker()
@@ -301,7 +301,7 @@ async def log_activity_event(
     candidate_id: UUID,
     event: ActivityEventCreate,
     request: Request,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_EDIT)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_WRITE)),
 ):
     """Log an activity event for a candidate."""
     tracker = get_activity_tracker()
@@ -323,7 +323,7 @@ async def log_activity_event(
 @router.get("/activity/my-recent", response_model=list[ActivityEventResponse])
 async def get_my_recent_activity(
     limit: int = Query(50, ge=1, le=100),
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get recent activity for the current user (recruiter dashboard)."""
     tracker = get_activity_tracker()
@@ -335,7 +335,7 @@ async def get_my_recent_activity(
 @router.get("/candidates/{candidate_id}/engagement")
 async def get_candidate_engagement(
     candidate_id: UUID,
-    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_VIEW)),
+    current_user: TokenData = Depends(require_permission(Permission.RECRUITING_READ)),
 ):
     """Get engagement metrics for a candidate."""
     tracker = get_activity_tracker()

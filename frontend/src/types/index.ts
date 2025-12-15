@@ -191,3 +191,8 @@ export interface Resume {
   parsed_data?: Record<string, unknown>;
   created_at: string;
 }
+
+// =============================================================================
+// Re-export Recruiting DTOs (API Contract)
+// =============================================================================
+export * from "./recruiting";

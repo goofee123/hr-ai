@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.database import init_db
 from app.shared.routers import auth, health, users
-from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports, eeo, scorecards, comments, red_flags, offer_declines, interviews, candidate_portal, observations
+from app.recruiting.routers import jobs, candidates, applications, pipeline, tasks, assignments, resumes, matching, bulk, offers, reports, eeo, scorecards, comments, red_flags, offer_declines, interviews, candidate_portal, observations, merge_queue
 from app.admin.routers import config as admin_config
 from app.integrations import router as integrations_router
 from app.compensation.routers import cycles as comp_cycles, rules as comp_rules, scenarios as comp_scenarios, worksheets as comp_worksheets, data_import as comp_import
@@ -179,6 +179,12 @@ app.include_router(
     observations.router,
     prefix=f"{settings.api_v1_prefix}/recruiting",
     tags=["Recruiting - Observations & Activity"],
+)
+
+app.include_router(
+    merge_queue.router,
+    prefix=f"{settings.api_v1_prefix}/recruiting/merge-queue",
+    tags=["Recruiting - Merge Queue"],
 )
 
 # Admin module

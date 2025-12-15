@@ -8,8 +8,26 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { mockCandidates, mockJobs, mockJobMatches, calculateRelevanceScore } from "@/lib/mock-data/recruiting";
+import {
+  mockCandidates,
+  mockJobs,
+  mockJobMatches,
+  mockMatchingConfig,
+  getConfidenceLabel,
+  getConfidenceLabelColor,
+} from "@/lib/mock-data/recruiting";
 import Link from "next/link";
+import { Lock, Settings, Cpu, AlertTriangle, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+// Model provenance for debugging and legal traceability
+interface ModelProvenance {
+  modelName: string;
+  modelVersion: string;
+  promptVersion: string;
+  rerankModel?: string;
+  embeddingModel?: string;
+}
 
 // Extended match data for visualization
 interface DetailedMatch {
@@ -18,6 +36,7 @@ interface DetailedMatch {
   jobId: string;
   jobTitle: string;
   overallScore: number;
+  confidence: number; // 0-1 confidence in the match score
   breakdown: {
     skills: number;
     experience: number;
@@ -31,7 +50,20 @@ interface DetailedMatch {
   concerns: string[];
   llmRanking?: number;
   llmExplanation?: string;
+  modelProvenance: ModelProvenance;
 }
+
+// Generate confidence based on score breakdown consistency
+const calculateMatchConfidence = (breakdown: DetailedMatch["breakdown"]): number => {
+  const values = Object.values(breakdown);
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / values.length;
+  const stdDev = Math.sqrt(variance);
+  // Higher consistency (lower stdDev) = higher confidence
+  // Scale: stdDev 0-10 = 0.95-1.0, stdDev 20+ = 0.65-0.80
+  const baseConfidence = Math.max(0.65, Math.min(0.98, 1 - stdDev / 100));
+  return Math.round(baseConfidence * 100) / 100;
+};
 
 // Generate detailed matches from mock data
 const generateDetailedMatches = (): DetailedMatch[] => {
@@ -48,12 +80,15 @@ const generateDetailedMatches = (): DetailedMatch[] => {
       (s) => !candidateSkills.some((cs) => cs.toLowerCase() === s.toLowerCase())
     );
 
+    const confidence = calculateMatchConfidence(match.breakdown);
+
     return {
       candidateId: match.candidateId,
       candidateName: candidate ? `${candidate.firstName} ${candidate.lastName}` : "Unknown",
       jobId: match.jobId,
       jobTitle: job?.title || "Unknown Position",
       overallScore: match.overallScore,
+      confidence,
       breakdown: match.breakdown,
       matchedSkills: matchedSkills.slice(0, 5),
       missingSkills: missingSkills.slice(0, 3),
@@ -69,6 +104,13 @@ const generateDetailedMatches = (): DetailedMatch[] => {
       ].filter(Boolean),
       llmRanking: Math.floor(Math.random() * 5) + 1,
       llmExplanation: generateLLMExplanation(match.overallScore, matchedSkills.length),
+      modelProvenance: {
+        modelName: mockMatchingConfig.modelVersion.split("-")[0],
+        modelVersion: mockMatchingConfig.modelVersion,
+        promptVersion: "v2.3-matching",
+        rerankModel: "gpt-4-turbo",
+        embeddingModel: "text-embedding-3-small",
+      },
     };
   });
 };
@@ -148,39 +190,60 @@ function ScoreBar({ label, value, color }: { label: string; value: number; color
 // Match card component
 function MatchCard({ match, showJob = true }: { match: DetailedMatch; showJob?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const confidenceLabel = getConfidenceLabel(match.confidence);
+  const confidenceColor = getConfidenceLabelColor(match.confidence);
 
   return (
-    <Card className="mb-4 hover:shadow-lg transition-all">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <Avatar>
-              <AvatarFallback>
-                {match.candidateName.split(" ").map((n) => n[0]).join("")}
-              </AvatarFallback>
-            </Avatar>
-            <div>
-              <CardTitle className="text-lg">{match.candidateName}</CardTitle>
-              {showJob && (
-                <CardDescription>Matched to: {match.jobTitle}</CardDescription>
+    <TooltipProvider>
+      <Card className="mb-4 hover:shadow-lg transition-all">
+        <CardHeader className="pb-2">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              <Avatar>
+                <AvatarFallback>
+                  {match.candidateName.split(" ").map((n) => n[0]).join("")}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <CardTitle className="text-lg">{match.candidateName}</CardTitle>
+                {showJob && (
+                  <CardDescription>Matched to: {match.jobTitle}</CardDescription>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Confidence Label */}
+              <Tooltip>
+                <TooltipTrigger>
+                  <Badge variant="outline" className={`${confidenceColor} cursor-help`}>
+                    {confidenceLabel}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  <p className="text-sm">
+                    <strong>Confidence: {Math.round(match.confidence * 100)}%</strong>
+                    <br />
+                    {confidenceLabel === "Explicit" && "High certainty - consistent scores across all dimensions"}
+                    {confidenceLabel === "Very Likely" && "Good certainty - minor variations in score components"}
+                    {confidenceLabel === "Inferred" && "Moderate certainty - some score components differ significantly"}
+                    {confidenceLabel === "Uncertain" && "Lower certainty - significant variation in match components"}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              {match.llmRanking && (
+                <Badge variant="outline" className="bg-purple-50 text-purple-700">
+                  LLM Rank #{match.llmRanking}
+                </Badge>
               )}
+              <Badge
+                variant={match.overallScore >= 80 ? "default" : "secondary"}
+                className={match.overallScore >= 80 ? "bg-green-600" : ""}
+              >
+                {match.overallScore}% match
+              </Badge>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {match.llmRanking && (
-              <Badge variant="outline" className="bg-purple-50 text-purple-700">
-                LLM Rank #{match.llmRanking}
-              </Badge>
-            )}
-            <Badge
-              variant={match.overallScore >= 80 ? "default" : "secondary"}
-              className={match.overallScore >= 80 ? "bg-green-600" : ""}
-            >
-              {match.overallScore}% match
-            </Badge>
-          </div>
-        </div>
-      </CardHeader>
+        </CardHeader>
       <CardContent>
         {/* Score Breakdown */}
         <div className="grid grid-cols-5 gap-3 mb-4">
@@ -236,11 +299,40 @@ function MatchCard({ match, showJob = true }: { match: DetailedMatch; showJob?: 
             {match.llmExplanation && (
               <div className="p-3 bg-purple-50 rounded-lg">
                 <h4 className="font-medium text-purple-800 mb-1 flex items-center gap-2">
-                  <span>🤖</span> AI Analysis
+                  <Cpu className="h-4 w-4" /> AI Analysis
                 </h4>
                 <p className="text-sm text-purple-700">{match.llmExplanation}</p>
               </div>
             )}
+
+            {/* Model Provenance */}
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <h4 className="font-medium text-gray-700 mb-2 flex items-center gap-2 text-sm">
+                <Info className="h-3 w-3" /> Match Provenance (Debug)
+              </h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-gray-600">
+                <div>
+                  <span className="font-medium">Model:</span>{" "}
+                  {match.modelProvenance.modelVersion}
+                </div>
+                <div>
+                  <span className="font-medium">Prompt:</span>{" "}
+                  {match.modelProvenance.promptVersion}
+                </div>
+                {match.modelProvenance.rerankModel && (
+                  <div>
+                    <span className="font-medium">Rerank:</span>{" "}
+                    {match.modelProvenance.rerankModel}
+                  </div>
+                )}
+                {match.modelProvenance.embeddingModel && (
+                  <div>
+                    <span className="font-medium">Embed:</span>{" "}
+                    {match.modelProvenance.embeddingModel}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -258,6 +350,7 @@ function MatchCard({ match, showJob = true }: { match: DetailedMatch; showJob?: 
         </div>
       </CardContent>
     </Card>
+    </TooltipProvider>
   );
 }
 
@@ -350,27 +443,60 @@ export default function JobMatchingPage() {
       <Card className="mb-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <span>🎯</span> Hybrid Matching Engine
+            <Cpu className="h-5 w-5" /> Hybrid Matching Engine
           </CardTitle>
           <CardDescription>
             Multi-stage matching pipeline for optimal candidate-job pairing
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
+          {/* Pipeline Stages */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             {[
-              { stage: "Hard Filters", desc: "Location, Visa, Experience", icon: "🔍" },
-              { stage: "Skill Tags", desc: "Pre-indexed intersection", icon: "🏷️" },
-              { stage: "Embeddings", desc: "pgvector similarity", icon: "🧮" },
-              { stage: "LLM Rerank", desc: "GPT-4 analysis (top 20)", icon: "🤖" },
-              { stage: "Final Score", desc: "Weighted combination", icon: "✨" },
+              { stage: "Hard Filters", desc: "Location, Visa, Experience", icon: "1" },
+              { stage: "Skill Tags", desc: "Pre-indexed intersection", icon: "2" },
+              { stage: "Embeddings", desc: "pgvector similarity", icon: "3" },
+              { stage: "LLM Rerank", desc: "GPT-4 analysis (top 20)", icon: "4" },
+              { stage: "Final Score", desc: "Weighted combination", icon: "5" },
             ].map((item, i) => (
               <div key={i} className="text-center p-3 bg-gray-50 rounded-lg">
-                <div className="text-2xl mb-1">{item.icon}</div>
+                <div className="w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center mx-auto mb-2 text-sm font-bold">{item.icon}</div>
                 <h4 className="font-medium text-sm">{item.stage}</h4>
                 <p className="text-xs text-gray-500">{item.desc}</p>
               </div>
             ))}
+          </div>
+
+          {/* Weights Configuration (Read-Only) */}
+          <div className="border-t pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-medium text-sm flex items-center gap-2">
+                <Lock className="h-3 w-3 text-gray-400" />
+                Scoring Weights
+              </h4>
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>Model: {mockMatchingConfig.modelVersion}</span>
+                <Badge variant="outline" className="text-xs">
+                  <Settings className="h-3 w-3 mr-1" />
+                  Admin Only
+                </Badge>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+              {Object.entries(mockMatchingConfig.weights).map(([key, value]) => (
+                <div key={key} className="bg-gray-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-blue-600">{(value * 100).toFixed(0)}%</div>
+                  <div className="text-xs text-gray-500 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700 flex items-center gap-2">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              <span>
+                Skill relevance decays over time: {mockMatchingConfig.relevanceDecay.after3Years * 100}% weight for skills 3+ years old, {mockMatchingConfig.relevanceDecay.after5Years * 100}% for 5+ years.
+                <Link href="/admin/matching-config" className="ml-1 underline">Configure in Admin</Link>
+              </span>
+            </div>
           </div>
         </CardContent>
       </Card>
